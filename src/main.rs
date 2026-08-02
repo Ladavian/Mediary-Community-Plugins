@@ -18,10 +18,11 @@ async fn main() {
 async fn run() -> Result<(), String> {
     let action = env::var("MEDIARY_PLUGIN_ACTION").unwrap_or_default();
     let settings = read_settings();
-    let _payload = read_action_input()?;
+    let payload = read_action_input()?;
     let client = DockerCopilot::new(&settings)?;
 
     let result = match action.as_str() {
+        "dashboard" => dashboard(&client, &settings, &payload).await?,
         "check_updates" => check_updates(&client, &settings).await?,
         "auto_update" => auto_update(&client, &settings).await?,
         "backup" => backup(&client).await?,
@@ -119,11 +120,59 @@ fn response_data_array(response: &Value, expected_code: i64, operation: &str) ->
 }
 
 async fn check_updates(dc: &DockerCopilot, settings: &Map<String, Value>) -> Result<Value, String> {
-    let selected = names(setting(settings, "update_containers"));
+    let selected = load_selection(settings).update_containers;
     let containers = dc.containers().await?;
     let updates = containers.iter().filter(|item| has_update(item) && (selected.is_empty() || selected.contains(&name(item)))).map(container_summary).collect::<Vec<_>>();
     let notice = if updates.is_empty() { "没有发现可更新的容器。".to_string() } else { format!("发现 {} 个可更新容器：{}。", updates.len(), updates.iter().filter_map(|v| v.get("name").and_then(Value::as_str)).collect::<Vec<_>>().join("、")) };
     Ok(json!({"notice": notice, "report": {"checked": containers.len(), "updates": updates}}))
+}
+
+async fn dashboard(
+    dc: &DockerCopilot,
+    settings: &Map<String, Value>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let containers = dc.containers().await?;
+    let available = containers.iter().map(name).filter(|name| !name.is_empty()).collect::<std::collections::HashSet<_>>();
+    let mut selection = load_selection(settings);
+    let saving = payload.get("update_containers").is_some() || payload.get("auto_update_containers").is_some();
+    if saving {
+        selection.update_containers = payload_names(payload, "update_containers", &available);
+        selection.auto_update_containers = payload_names(payload, "auto_update_containers", &available);
+        save_selection(&selection)?;
+    }
+    let options = containers.iter().filter_map(|container| {
+        let name = name(container);
+        (!name.is_empty()).then(|| json!({"label": name.clone(), "value": name}))
+    }).collect::<Vec<_>>();
+    let items = containers.iter().filter_map(|container| {
+        let name = name(container);
+        (!name.is_empty()).then(|| json!({
+            "key": name.clone(),
+            "title": name,
+            "subtitle": text(container, "usingImage"),
+            "badges": [{
+                "label": if has_update(container) { "可更新" } else { "已是最新" },
+                "tone": if has_update(container) { "warning" } else { "success" }
+            }],
+            "metadata": [
+                {"label": "状态", "value": text(container, "status")},
+                {"label": "运行时长", "value": text(container, "runningTime")}
+            ]
+        }))
+    }).collect::<Vec<_>>();
+    Ok(json!({
+        "notice": if saving { "容器选择已保存。" } else { "已从 Docker Copilot 加载容器。" },
+        "items": items,
+        "form_options": {
+            "update_containers": options.clone(),
+            "auto_update_containers": options
+        },
+        "form_values": {
+            "update_containers": selection.update_containers.into_iter().collect::<Vec<_>>(),
+            "auto_update_containers": selection.auto_update_containers.into_iter().collect::<Vec<_>>()
+        }
+    }))
 }
 
 async fn auto_update(dc: &DockerCopilot, settings: &Map<String, Value>) -> Result<Value, String> {
@@ -139,7 +188,7 @@ async fn auto_update(dc: &DockerCopilot, settings: &Map<String, Value>) -> Resul
             }
         }
     }
-    let selected = names(setting(settings, "auto_update_containers"));
+    let selected = load_selection(settings).auto_update_containers;
     if selected.is_empty() { return Ok(json!({"notice": "未设置自动更新容器，未执行更新。", "report": {"cleaned_images": cleaned, "updated": []}})); }
     let mut updated = Vec::new();
     let mut skipped = Vec::new();
@@ -195,6 +244,38 @@ fn save_last_run(action: &str, result: &Value) {
     if fs::write(&temp, record.to_string()).is_ok() { let _ = fs::rename(temp, path.join("last-run.json")); }
 }
 
+struct ContainerSelection {
+    update_containers: std::collections::HashSet<String>,
+    auto_update_containers: std::collections::HashSet<String>,
+}
+
+fn load_selection(settings: &Map<String, Value>) -> ContainerSelection {
+    let fallback = ContainerSelection {
+        update_containers: names(setting(settings, "update_containers")),
+        auto_update_containers: names(setting(settings, "auto_update_containers")),
+    };
+    let Ok(data_dir) = env::var("MEDIARY_PLUGIN_DATA_DIR") else { return fallback; };
+    let Ok(raw) = fs::read_to_string(Path::new(&data_dir).join("container-selection.json")) else { return fallback; };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else { return fallback; };
+    ContainerSelection {
+        update_containers: value_names(&value, "update_containers"),
+        auto_update_containers: value_names(&value, "auto_update_containers"),
+    }
+}
+
+fn save_selection(selection: &ContainerSelection) -> Result<(), String> {
+    let data_dir = env::var("MEDIARY_PLUGIN_DATA_DIR").map_err(|_| "Mediary 未提供插件数据目录，无法保存容器选择".to_string())?;
+    let path = Path::new(&data_dir);
+    fs::create_dir_all(path).map_err(|_| "无法创建插件数据目录".to_string())?;
+    let record = json!({
+        "update_containers": selection.update_containers.iter().cloned().collect::<Vec<_>>(),
+        "auto_update_containers": selection.auto_update_containers.iter().cloned().collect::<Vec<_>>(),
+    });
+    let temp = path.join("container-selection.json.tmp");
+    fs::write(&temp, record.to_string()).map_err(|_| "无法写入容器选择".to_string())?;
+    fs::rename(temp, path.join("container-selection.json")).map_err(|_| "无法保存容器选择".to_string())
+}
+
 fn unix_time() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_secs()).unwrap_or(0) }
 fn setting<'a>(settings: &'a Map<String, Value>, key: &str) -> &'a str { settings.get(key).and_then(Value::as_str).unwrap_or("") }
 fn setting_bool(settings: &Map<String, Value>, key: &str, default: bool) -> bool { settings.get(key).and_then(Value::as_bool).unwrap_or(default) }
@@ -206,6 +287,8 @@ fn has_update(value: &Value) -> bool { value.get("haveUpdate").and_then(Value::a
 fn is_in_use(value: &Value) -> bool { value.get("inUsed").and_then(Value::as_bool).unwrap_or(false) }
 fn is_untagged(value: &Value) -> bool { match value.get("tag") { None | Some(Value::Null) => true, Some(Value::String(tag)) => tag.trim().is_empty() || tag == "<none>", Some(Value::Array(tags)) => tags.is_empty(), _ => false } }
 fn names(raw: &str) -> std::collections::HashSet<String> { raw.split(',').map(str::trim).filter(|name| !name.is_empty()).map(ToOwned::to_owned).collect() }
+fn value_names(value: &Value, key: &str) -> std::collections::HashSet<String> { value.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).map(ToOwned::to_owned).collect() }
+fn payload_names(payload: &Value, key: &str, available: &std::collections::HashSet<String>) -> std::collections::HashSet<String> { value_names(payload, key).into_iter().filter(|name| available.contains(name)).collect() }
 fn container_summary(value: &Value) -> Value { json!({"name": name(value), "image": text(value, "usingImage"), "status": text(value, "status"), "running_time": text(value, "runningTime"), "created_at": text(value, "createTime")}) }
 
 #[cfg(test)]

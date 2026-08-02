@@ -2,10 +2,46 @@
   "api_version": 1,
   "id": "ladavian.dockercopilot-helper",
   "name": "DC 助手",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "连接 Docker Copilot，检查容器更新、按选项自动更新、清理未使用的无标签镜像并备份容器配置。",
   "action_runtime": {
     "entrypoint": "./plugin"
+  },
+  "interactive_view": {
+    "title": "容器选择",
+    "eyebrow": "Docker Copilot",
+    "action": "dashboard",
+    "trigger": {
+      "label": "选择容器",
+      "icon": "server"
+    },
+    "submit": {
+      "label": "保存选择",
+      "pending_label": "保存中",
+      "icon": "check"
+    },
+    "auto_run": true,
+    "layout": "list",
+    "form_collapsible": false,
+    "fields": [
+      {
+        "key": "update_containers",
+        "type": "multiselect",
+        "label": "检查更新的容器",
+        "help": "留空时检查所有容器。"
+      },
+      {
+        "key": "auto_update_containers",
+        "type": "multiselect",
+        "label": "自动更新容器",
+        "help": "仅会更新这里勾选、且 Docker Copilot 标记为可更新的容器。"
+      }
+    ],
+    "empty": {
+      "text": "尚未发现容器，请检查 Docker Copilot 地址和 Secret Key。",
+      "icon": "server"
+    },
+    "error_message": "读取 Docker Copilot 容器失败，请检查连接配置。"
   },
   "scheduled_actions": [
     {
@@ -69,25 +105,11 @@
             "placeholder": "0 */6 * * *"
           },
           {
-            "key": "update_containers",
-            "type": "text",
-            "label": "检查更新的容器",
-            "help": "以英文逗号分隔；留空时检查所有容器。",
-            "placeholder": "emby, qbittorrent"
-          },
-          {
             "key": "auto_update_cron",
             "type": "text",
             "label": "自动更新周期",
             "default": "0 4 * * *",
             "placeholder": "0 4 * * *"
-          },
-          {
-            "key": "auto_update_containers",
-            "type": "text",
-            "label": "自动更新容器",
-            "help": "以英文逗号分隔；留空时不会自动更新任何容器。",
-            "placeholder": "emby"
           },
           {
             "key": "clean_unused_images",

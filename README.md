@@ -25,7 +25,7 @@ Mediary 不提供 MoviePilot 的内部消息推送接口。因此每次计划动
 
 - **Docker Copilot 地址**：例如 `http://192.168.1.10:12712`。
 - **Secret Key**：用于每次请求生成 HS256 JWT；该项作为密码字段处理，且不会写入日志或数据文件。
-- **容器列表**：使用英文逗号分隔。检查更新留空表示检查全部；自动更新留空表示不更新任何容器。
+- **容器选择**：在插件的“容器选择”页面中从 Docker Copilot 自动加载的下拉多选框勾选；保存后，更新检查与自动更新任务会使用对应选择。检查更新留空表示检查全部；自动更新留空表示不更新任何容器。
 - **Cron**：使用五段表达式，按 Mediary 宿主时区运行。
 
 Docker Copilot Zspace 项目已归档。请确保所用服务仍兼容其 `/api/containers`、`/api/images`、`/api/container/{id}/update`、`/api/progress/{taskID}` 和 `/api/container/backup` 接口。
