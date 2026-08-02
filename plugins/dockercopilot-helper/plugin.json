@@ -2,8 +2,9 @@
   "api_version": 1,
   "id": "dockercopilot-helper",
   "name": "DC 助手",
-  "version": "1.0.5",
-  "description": "连接 Docker Copilot，检查容器更新、按选项自动更新、清理未使用的无标签镜像并备份容器配置。",
+  "version": "1.0.6",
+  "description": "连接 Docker Copilot，检查容器更新、按选项自动更新、清理未使用的无标签镜像并备份容器配置，并发送系统通知。",
+  "requested_scopes": ["notifications:send"],
   "action_runtime": {
     "entrypoint": "./plugin"
   },
@@ -151,6 +152,25 @@
             "default": 6,
             "min": 1,
             "max": 100
+          }
+        ]
+      },
+      {
+        "title": "通知",
+        "fields": [
+          {
+            "key": "send_notifications",
+            "type": "switch",
+            "label": "发送系统通知",
+            "help": "自动更新、备份或操作失败时发送通知。",
+            "default": true
+          },
+          {
+            "key": "notify_when_no_updates",
+            "type": "switch",
+            "label": "无更新时也通知",
+            "help": "关闭后，仅在检查到可更新容器时通知。",
+            "default": false
           }
         ]
       }

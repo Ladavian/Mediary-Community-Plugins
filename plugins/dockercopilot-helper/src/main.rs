@@ -9,28 +9,39 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("{error}");
-        std::process::exit(1);
+    let action = env::var("MEDIARY_PLUGIN_ACTION").unwrap_or_default();
+    let settings = read_settings();
+    match run(&action, &settings).await {
+        Ok(result) => {
+            save_last_run(&action, &result);
+            if let Err(error) = notify_success(&settings, &action, &result).await {
+                eprintln!("发送 DC 助手通知失败: {error}");
+            }
+            println!("{result}");
+        }
+        Err(error) => {
+            if setting_bool(&settings, "send_notifications", true) {
+                if let Err(notification_error) = send_notification("DC 助手执行失败", &format!("动作：{}\n原因：{error}", action_label(&action))).await {
+                    eprintln!("发送 DC 助手失败通知失败: {notification_error}");
+                }
+            }
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
     }
 }
 
-async fn run() -> Result<(), String> {
-    let action = env::var("MEDIARY_PLUGIN_ACTION").unwrap_or_default();
-    let settings = read_settings();
+async fn run(action: &str, settings: &Map<String, Value>) -> Result<Value, String> {
     let payload = read_action_input()?;
-    let client = DockerCopilot::new(&settings)?;
+    let client = DockerCopilot::new(settings)?;
 
-    let result = match action.as_str() {
-        "dashboard" => dashboard(&client, &settings, &payload).await?,
-        "check_updates" => check_updates(&client, &settings).await?,
-        "auto_update" => auto_update(&client, &settings).await?,
-        "backup" => backup(&client).await?,
+    match action {
+        "dashboard" => dashboard(&client, settings, &payload).await,
+        "check_updates" => check_updates(&client, settings).await,
+        "auto_update" => auto_update(&client, settings).await,
+        "backup" => backup(&client).await,
         _ => return Err(format!("不支持的 DC 助手动作: {action}")),
-    };
-    save_last_run(&action, &result);
-    println!("{result}");
-    Ok(())
+    }
 }
 
 fn read_settings() -> Map<String, Value> {
@@ -233,6 +244,38 @@ async fn track_progress(dc: &DockerCopilot, task_id: &str, settings: &Map<String
 async fn backup(dc: &DockerCopilot) -> Result<Value, String> {
     let response = dc.get("api/container/backup").await?;
     if response.get("code").and_then(Value::as_i64) == Some(200) { Ok(json!({"notice": "容器配置备份成功。", "report": {"message": message(&response)}})) } else { Err(format!("容器配置备份失败: {}", message(&response))) }
+}
+
+async fn notify_success(settings: &Map<String, Value>, action: &str, result: &Value) -> Result<(), String> {
+    if !setting_bool(settings, "send_notifications", true) || action == "dashboard" { return Ok(()); }
+    let report = result.get("report").unwrap_or(&Value::Null);
+    if action == "check_updates" {
+        let updates = report.get("updates").and_then(Value::as_array).map_or(0, Vec::len);
+        if updates == 0 && !setting_bool(settings, "notify_when_no_updates", false) { return Ok(()); }
+    }
+    let notice = result.get("notice").and_then(Value::as_str).unwrap_or("DC 助手任务已完成。");
+    send_notification(&format!("DC 助手：{}", action_label(action)), notice).await
+}
+
+async fn send_notification(title: &str, content: &str) -> Result<(), String> {
+    let api_url = env::var("MEDIARY_PLUGIN_API_URL").map_err(|_| "Mediary 未提供插件 API 地址".to_string())?;
+    let token = env::var("MEDIARY_PLUGIN_TOKEN").map_err(|_| "Mediary 未提供插件令牌".to_string())?;
+    let response = Client::builder().timeout(Duration::from_secs(15)).build().map_err(|e| e.to_string())?
+        .post(format!("{}/plugin/notifications", api_url.trim_end_matches('/')))
+        .bearer_auth(token)
+        .json(&json!({"title": title, "content": content}))
+        .send().await.map_err(|e| format!("请求 Mediary 通知服务失败: {e}"))?;
+    if response.status().is_success() { Ok(()) } else { Err(format!("Mediary 通知服务返回 HTTP {}", response.status())) }
+}
+
+fn action_label(action: &str) -> &str {
+    match action {
+        "check_updates" => "检查更新",
+        "auto_update" => "自动更新",
+        "backup" => "备份容器配置",
+        "dashboard" => "容器选择",
+        _ => "未知动作",
+    }
 }
 
 fn save_last_run(action: &str, result: &Value) {
