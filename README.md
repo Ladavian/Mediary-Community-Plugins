@@ -7,12 +7,12 @@
 
 | 插件 | 目录 | 说明 |
 | --- | --- | --- |
-| DC 助手 | `plugins/ladavian.dockercopilot-helper/` | Docker Copilot 的更新检查、自动更新、镜像清理和备份 |
+| DC 助手 | `plugins/dockercopilot-helper/` | Docker Copilot 的更新检查、自动更新、镜像清理和备份 |
 
 ## 发布一个插件
 
 1. 在插件目录更新 `plugin.json` 的版本，并确保 `plugin-source.json` 中的二进制名、作者、权限和兼容版本正确。
-2. 推送标签：`<plugin-id>-v<version>`，例如 `ladavian.dockercopilot-helper-v1.0.3`。
+2. 推送标签：`<plugin-id>-v<version>`，例如 `dockercopilot-helper-v1.0.4`。
 3. GitHub Actions 自动运行测试、构建 Linux AMD64 安装包、生成 SHA-256 并创建不可变 Release。
 4. 如已配置 `MEDIARY_STORE_TOKEN`，同一工作流会更新 `Ladavian/Mediary-Plugins` Fork，并向官方商店自动创建草稿 PR。
 

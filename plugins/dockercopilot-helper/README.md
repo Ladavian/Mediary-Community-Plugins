@@ -16,10 +16,10 @@ Mediary 不提供 MoviePilot 的内部消息推送接口。因此每次计划动
 在具备 Rust 工具链的 Linux 环境执行：
 
 ```bash
-./build.sh 1.0.3 x86_64-unknown-linux-gnu
+./build.sh 1.0.4 x86_64-unknown-linux-gnu
 ```
 
-会生成 `ladavian.dockercopilot-helper-1.0.3-linux-amd64.tar.gz`。压缩包根目录直接包含 `plugin` 和 `plugin.json`，可按 Mediary 插件开发指南安装。
+会生成 `dockercopilot-helper-1.0.4-linux-amd64.tar.gz`。压缩包根目录直接包含 `plugin` 和 `plugin.json`，可按 Mediary 插件开发指南安装。
 
 ## 配置
 
