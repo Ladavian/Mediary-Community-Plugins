@@ -1,0 +1,13 @@
+[package]
+name = "dockercopilot-helper"
+version = "1.0.0"
+edition = "2021"
+description = "Mediary plugin for Docker Copilot update checks, updates, cleanup, and backups"
+
+[dependencies]
+base64 = "0.22"
+hmac = "0.12"
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "time"] }

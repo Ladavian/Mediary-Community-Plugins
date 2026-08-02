@@ -1,0 +1,150 @@
+{
+  "api_version": 1,
+  "id": "gxterry.dockercopilot-helper",
+  "name": "DC 助手",
+  "version": "1.0.0",
+  "description": "连接 Docker Copilot，检查容器更新、按选项自动更新、清理未使用的无标签镜像并备份容器配置。",
+  "action_runtime": {
+    "entrypoint": "./plugin"
+  },
+  "scheduled_actions": [
+    {
+      "action": "check_updates",
+      "label": "检查容器更新",
+      "manual": true,
+      "cron_setting": "update_check_cron",
+      "timeout_seconds": 60
+    },
+    {
+      "action": "auto_update",
+      "label": "自动更新容器",
+      "manual": true,
+      "cron_setting": "auto_update_cron",
+      "timeout_seconds": 900
+    },
+    {
+      "action": "backup",
+      "label": "备份容器配置",
+      "manual": true,
+      "cron_setting": "backup_cron",
+      "timeout_seconds": 60
+    }
+  ],
+  "secret_fields": ["secret_key"],
+  "settings_schema": {
+    "sections": [
+      {
+        "title": "Docker Copilot 连接",
+        "fields": [
+          {
+            "key": "$enabled",
+            "type": "switch",
+            "label": "启用插件",
+            "default": false
+          },
+          {
+            "key": "host",
+            "type": "text",
+            "label": "Docker Copilot 地址",
+            "placeholder": "http://192.168.1.10:12712",
+            "span": 2
+          },
+          {
+            "key": "secret_key",
+            "type": "text",
+            "label": "Docker Copilot Secret Key",
+            "placeholder": "Docker Copilot 的密钥",
+            "span": 2
+          }
+        ]
+      },
+      {
+        "title": "更新检查与自动更新",
+        "fields": [
+          {
+            "key": "update_check_cron",
+            "type": "text",
+            "label": "更新检查周期",
+            "default": "0 */6 * * *",
+            "placeholder": "0 */6 * * *"
+          },
+          {
+            "key": "update_containers",
+            "type": "text",
+            "label": "检查更新的容器",
+            "help": "以英文逗号分隔；留空时检查所有容器。",
+            "placeholder": "emby, qbittorrent"
+          },
+          {
+            "key": "auto_update_cron",
+            "type": "text",
+            "label": "自动更新周期",
+            "default": "0 4 * * *",
+            "placeholder": "0 4 * * *"
+          },
+          {
+            "key": "auto_update_containers",
+            "type": "text",
+            "label": "自动更新容器",
+            "help": "以英文逗号分隔；留空时不会自动更新任何容器。",
+            "placeholder": "emby"
+          },
+          {
+            "key": "clean_unused_images",
+            "type": "switch",
+            "label": "自动更新前清理无标签且未使用的镜像",
+            "default": false,
+            "span": 2
+          }
+        ]
+      },
+      {
+        "title": "备份与进度",
+        "fields": [
+          {
+            "key": "backup_cron",
+            "type": "text",
+            "label": "备份周期",
+            "default": "0 3 * * *",
+            "placeholder": "0 3 * * *"
+          },
+          {
+            "key": "track_progress",
+            "type": "switch",
+            "label": "跟踪更新进度",
+            "default": true
+          },
+          {
+            "key": "progress_interval_seconds",
+            "type": "number",
+            "label": "进度轮询间隔（秒）",
+            "default": 10,
+            "min": 1,
+            "max": 300
+          },
+          {
+            "key": "progress_attempts",
+            "type": "number",
+            "label": "最大轮询次数",
+            "default": 6,
+            "min": 1,
+            "max": 100
+          }
+        ]
+      }
+    ]
+  },
+  "data_view": {
+    "title": "最近一次执行",
+    "file": "data/last-run.json",
+    "summary": [
+      {"key": "action", "label": "动作"},
+      {"key": "ok", "label": "成功"}
+    ],
+    "fields": [
+      {"key": "action", "label": "动作", "primary": true},
+      {"key": "notice", "label": "结果"},
+      {"key": "completed_at", "label": "完成时间"}
+    ]
+  }
+}
