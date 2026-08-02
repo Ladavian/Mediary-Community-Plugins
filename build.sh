@@ -5,7 +5,7 @@ version="${1:-1.0.0}"
 target="${2:-x86_64-unknown-linux-gnu}"
 root="$(cd "$(dirname "$0")" && pwd)"
 stage="$root/target/package"
-archive="$root/gxterry.dockercopilot-helper-$version-linux-amd64.tar.gz"
+archive="$root/ladavian.dockercopilot-helper-$version-linux-amd64.tar.gz"
 
 cargo build --release --target "$target" --manifest-path "$root/Cargo.toml"
 mkdir -p "$stage"

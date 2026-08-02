@@ -24,15 +24,15 @@ jobs:
           cp plugin.json "$stage/plugin.json"
           cp target/release/dockercopilot-helper "$stage/plugin"
           chmod 755 "$stage/plugin"
-          tar -C "$stage" -czf "gxterry.dockercopilot-helper-$version-linux-amd64.tar.gz" plugin plugin.json
-          sha256sum "gxterry.dockercopilot-helper-$version-linux-amd64.tar.gz" > SHA256SUMS
+          tar -C "$stage" -czf "ladavian.dockercopilot-helper-$version-linux-amd64.tar.gz" plugin plugin.json
+          sha256sum "ladavian.dockercopilot-helper-$version-linux-amd64.tar.gz" > SHA256SUMS
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" \
-            "gxterry.dockercopilot-helper-$version-linux-amd64.tar.gz" \
+            "ladavian.dockercopilot-helper-$version-linux-amd64.tar.gz" \
             SHA256SUMS \
             --title "DC 助手 $version" \
-            --notes "Mediary Rust 版 DC 助手：更新检查、自动更新、镜像清理和备份。"
+            --notes "Mediary Rust 版 DC 助手：更新检查、自动更新、镜像清理和备份。源插件作者：gxterry。"
