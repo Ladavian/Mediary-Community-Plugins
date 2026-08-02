@@ -280,7 +280,7 @@ fn action_label(action: &str) -> &str {
 
 fn save_last_run(action: &str, result: &Value) {
     let Ok(path) = plugin_data_dir() else { return; };
-    if fs::create_dir_all(path).is_err() { return; }
+    if fs::create_dir_all(&path).is_err() { return; }
     let record = json!({"action": action, "ok": true, "notice": result.get("notice").and_then(Value::as_str).unwrap_or(""), "completed_at": unix_time()});
     let temp = path.join("last-run.json.tmp");
     if fs::write(&temp, record.to_string()).is_ok() { let _ = fs::rename(temp, path.join("last-run.json")); }

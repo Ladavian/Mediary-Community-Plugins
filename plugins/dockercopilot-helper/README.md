@@ -16,10 +16,10 @@
 在具备 Rust 工具链的 Linux 环境执行：
 
 ```bash
-./build.sh 1.0.8 x86_64-unknown-linux-gnu
+./build.sh 1.0.9 x86_64-unknown-linux-gnu
 ```
 
-会生成 `dockercopilot-helper-1.0.8-linux-amd64.tar.gz`。压缩包根目录直接包含 `plugin` 和 `plugin.json`，可按 Mediary 插件开发指南安装。GitHub Release 同时提供 Linux AMD64 与 ARM64 安装包。
+会生成 `dockercopilot-helper-1.0.9-linux-amd64.tar.gz`。压缩包根目录直接包含 `plugin` 和 `plugin.json`，可按 Mediary 插件开发指南安装。GitHub Release 同时提供 Linux AMD64 与 ARM64 安装包。
 
 ## 配置
 
