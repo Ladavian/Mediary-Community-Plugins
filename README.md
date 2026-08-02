@@ -8,6 +8,7 @@
 | 插件 | 目录 | 说明 |
 | --- | --- | --- |
 | DC 助手 | `plugins/dockercopilot-helper/` | Docker Copilot 的更新检查、自动更新、镜像清理和备份 |
+| 豆瓣将映 | `plugins/douban-coming/` | 按豆瓣想看人数筛选将映电视剧，提前订阅并发送开播提醒 |
 
 ## 发布一个插件
 
