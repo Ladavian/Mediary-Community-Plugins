@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const required = ["PLUGIN_ID", "VERSION", "SHA256", "SIZE", "SOURCE_REPOSITORY"];
+const required = ["PLUGIN_ID", "VERSION", "AMD64_SHA256", "AMD64_SIZE", "ARM64_SHA256", "ARM64_SIZE", "SOURCE_REPOSITORY"];
 for (const key of required) {
   if (!process.env[key]) throw new Error(`Missing required environment variable: ${key}`);
 }
@@ -27,8 +27,7 @@ const run = (command, args, options = {}) => execFileSync(command, args, {
   ...options,
 });
 const branch = `automation/publish-${pluginId}-v${version}`;
-const archive = `${pluginId}-${version}-linux-amd64.tar.gz`;
-const releaseUrl = `https://github.com/${sourceRepository}/releases/download/${pluginId}-v${version}/${archive}`;
+const releaseBaseUrl = `https://github.com/${sourceRepository}/releases/download/${pluginId}-v${version}`;
 const temporary = mkdtempSync(join(tmpdir(), "mediary-catalog-"));
 const store = join(temporary, "store");
 
@@ -52,9 +51,14 @@ try {
     permissions: source.permissions ?? [],
     artifacts: {
       "linux-amd64": {
-        url: releaseUrl,
-        sha256: process.env.SHA256,
-        size: Number(process.env.SIZE),
+        url: `${releaseBaseUrl}/${pluginId}-${version}-linux-amd64.tar.gz`,
+        sha256: process.env.AMD64_SHA256,
+        size: Number(process.env.AMD64_SIZE),
+      },
+      "linux-arm64": {
+        url: `${releaseBaseUrl}/${pluginId}-${version}-linux-arm64.tar.gz`,
+        sha256: process.env.ARM64_SHA256,
+        size: Number(process.env.ARM64_SIZE),
       },
     },
   };
@@ -63,7 +67,7 @@ try {
   run("git", ["add", "catalog.json", `plugins/${pluginId}.json`], { cwd: store });
   run("git", ["commit", "-m", `Publish ${pluginId} ${version}`], { cwd: store });
   run("git", ["push", "-u", "origin", branch], { cwd: store });
-  run("gh", ["pr", "create", "--repo", "KyleYu2024/Mediary-Plugins", "--base", "main", "--head", `Ladavian:${branch}`, "--draft", "--title", `Publish ${manifest.name} ${version}`, "--body", `Automated catalog update for ${pluginId} ${version}.\n\nSource: https://github.com/${sourceRepository}\nRelease: ${releaseUrl}`], { cwd: store });
+  run("gh", ["pr", "create", "--repo", "KyleYu2024/Mediary-Plugins", "--base", "main", "--head", `Ladavian:${branch}`, "--draft", "--title", `Publish ${manifest.name} ${version}`, "--body", `Automated catalog update for ${pluginId} ${version}.\n\nSource: https://github.com/${sourceRepository}\nRelease: ${releaseBaseUrl}`], { cwd: store });
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

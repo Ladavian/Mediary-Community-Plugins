@@ -2,7 +2,7 @@
   "api_version": 1,
   "id": "dockercopilot-helper",
   "name": "DC 助手",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "连接 Docker Copilot，检查容器更新、按选项自动更新、清理未使用的无标签镜像并备份容器配置。",
   "action_runtime": {
     "entrypoint": "./plugin"

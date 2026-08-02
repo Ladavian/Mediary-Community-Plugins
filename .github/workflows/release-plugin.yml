@@ -28,6 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
       - name: Resolve plugin release
         id: plugin
         shell: bash
@@ -54,7 +57,7 @@ jobs:
       - name: Test
         run: cargo test --manifest-path "${{ steps.plugin.outputs.dir }}/Cargo.toml"
       - name: Build Linux AMD64 package
-        id: package
+        id: amd64
         shell: bash
         run: |
           plugin_dir="${{ steps.plugin.outputs.dir }}"
@@ -62,7 +65,7 @@ jobs:
           version="${{ steps.plugin.outputs.version }}"
           binary="$(node -p "require('./$plugin_dir/plugin-source.json').binary")"
           cargo build --release --manifest-path "$plugin_dir/Cargo.toml"
-          stage="dist/$plugin_id"
+          stage="dist/$plugin_id/linux-amd64"
           archive="$plugin_id-$version-linux-amd64.tar.gz"
           mkdir -p "$stage"
           cp "$plugin_dir/plugin.json" "$stage/plugin.json"
@@ -73,12 +76,34 @@ jobs:
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
           echo "sha256=$(cut -d' ' -f1 SHA256SUMS)" >> "$GITHUB_OUTPUT"
           echo "size=$(wc -c < "$archive" | tr -d ' ')" >> "$GITHUB_OUTPUT"
+      - name: Build Linux ARM64 package
+        id: arm64
+        shell: bash
+        run: |
+          plugin_dir="${{ steps.plugin.outputs.dir }}"
+          plugin_id="${{ steps.plugin.outputs.id }}"
+          version="${{ steps.plugin.outputs.version }}"
+          binary="$(node -p "require('./$plugin_dir/plugin-source.json').binary")"
+          cross build --release --target aarch64-unknown-linux-gnu --manifest-path "$plugin_dir/Cargo.toml"
+          stage="dist/$plugin_id/linux-arm64"
+          archive="$plugin_id-$version-linux-arm64.tar.gz"
+          mkdir -p "$stage"
+          cp "$plugin_dir/plugin.json" "$stage/plugin.json"
+          cp "$plugin_dir/target/aarch64-unknown-linux-gnu/release/$binary" "$stage/plugin"
+          chmod 755 "$stage/plugin"
+          tar -C "$stage" -czf "$archive" plugin plugin.json
+          sha256sum "$archive" >> SHA256SUMS
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$archive" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "size=$(wc -c < "$archive" | tr -d ' ')" >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.plugin.outputs.tag }}" \
-            "${{ steps.package.outputs.archive }}" SHA256SUMS \
+            "${{ steps.amd64.outputs.archive }}" \
+            "${{ steps.arm64.outputs.archive }}" \
+            SHA256SUMS \
             --title "${{ steps.plugin.outputs.id }} ${{ steps.plugin.outputs.version }}" \
             --notes "Automated Mediary plugin release."
       - name: Open Mediary catalog PR
@@ -88,7 +113,9 @@ jobs:
           GH_TOKEN: ${{ secrets.MEDIARY_STORE_TOKEN }}
           PLUGIN_ID: ${{ steps.plugin.outputs.id }}
           VERSION: ${{ steps.plugin.outputs.version }}
-          SHA256: ${{ steps.package.outputs.sha256 }}
-          SIZE: ${{ steps.package.outputs.size }}
+          AMD64_SHA256: ${{ steps.amd64.outputs.sha256 }}
+          AMD64_SIZE: ${{ steps.amd64.outputs.size }}
+          ARM64_SHA256: ${{ steps.arm64.outputs.sha256 }}
+          ARM64_SIZE: ${{ steps.arm64.outputs.size }}
           SOURCE_REPOSITORY: ${{ github.repository }}
         run: node scripts/publish-catalog.mjs
