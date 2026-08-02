@@ -1,0 +1,7 @@
+{
+  "binary": "dockercopilot-helper",
+  "author": "Ladavian",
+  "description": "连接 Docker Copilot，检查和自动更新容器、清理未使用的无标签镜像并备份容器配置",
+  "min_mediary_version": "0.7.7",
+  "permissions": []
+}

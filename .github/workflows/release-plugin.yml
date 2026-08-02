@@ -1,0 +1,94 @@
+name: Release Mediary plugin
+
+on:
+  push:
+    tags: ["*-v*"]
+  workflow_dispatch:
+    inputs:
+      plugin_id:
+        description: Plugin ID, matching a directory under plugins/
+        required: true
+        type: string
+      version:
+        description: SemVer version to publish
+        required: true
+        type: string
+      publish_catalog:
+        description: Open a draft PR to the Mediary store when the store token is configured
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve plugin release
+        id: plugin
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            plugin_id="${{ inputs.plugin_id }}"
+            version="${{ inputs.version }}"
+            tag="$plugin_id-v$version"
+          else
+            tag="$GITHUB_REF_NAME"
+            plugin_id="${tag%-v*}"
+            version="${tag##*-v}"
+          fi
+          plugin_dir="plugins/$plugin_id"
+          test -f "$plugin_dir/Cargo.toml"
+          test -f "$plugin_dir/plugin.json"
+          test -f "$plugin_dir/plugin-source.json"
+          test "$(node -p "require('./$plugin_dir/plugin.json').id")" = "$plugin_id"
+          test "$(node -p "require('./$plugin_dir/plugin.json').version")" = "$version"
+          echo "id=$plugin_id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "dir=$plugin_dir" >> "$GITHUB_OUTPUT"
+      - name: Test
+        run: cargo test --manifest-path "${{ steps.plugin.outputs.dir }}/Cargo.toml"
+      - name: Build Linux AMD64 package
+        id: package
+        shell: bash
+        run: |
+          plugin_dir="${{ steps.plugin.outputs.dir }}"
+          plugin_id="${{ steps.plugin.outputs.id }}"
+          version="${{ steps.plugin.outputs.version }}"
+          binary="$(node -p "require('./$plugin_dir/plugin-source.json').binary")"
+          cargo build --release --manifest-path "$plugin_dir/Cargo.toml"
+          stage="dist/$plugin_id"
+          archive="$plugin_id-$version-linux-amd64.tar.gz"
+          mkdir -p "$stage"
+          cp "$plugin_dir/plugin.json" "$stage/plugin.json"
+          cp "$plugin_dir/target/release/$binary" "$stage/plugin"
+          chmod 755 "$stage/plugin"
+          tar -C "$stage" -czf "$archive" plugin plugin.json
+          sha256sum "$archive" > SHA256SUMS
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d' ' -f1 SHA256SUMS)" >> "$GITHUB_OUTPUT"
+          echo "size=$(wc -c < "$archive" | tr -d ' ')" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.plugin.outputs.tag }}" \
+            "${{ steps.package.outputs.archive }}" SHA256SUMS \
+            --title "${{ steps.plugin.outputs.id }} ${{ steps.plugin.outputs.version }}" \
+            --notes "Automated Mediary plugin release."
+      - name: Open Mediary catalog PR
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_catalog }}
+        env:
+          MEDIARY_STORE_TOKEN: ${{ secrets.MEDIARY_STORE_TOKEN }}
+          GH_TOKEN: ${{ secrets.MEDIARY_STORE_TOKEN }}
+          PLUGIN_ID: ${{ steps.plugin.outputs.id }}
+          VERSION: ${{ steps.plugin.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          SIZE: ${{ steps.package.outputs.size }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: node scripts/publish-catalog.mjs
