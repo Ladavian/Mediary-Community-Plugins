@@ -3,7 +3,7 @@ use hmac::{Hmac, Mac};
 use reqwest::{Client, Url};
 use serde_json::{Map, Value, json};
 use sha2::Sha256;
-use std::{env, fs, io::Read, path::Path, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{env, fs, io::Read, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -279,8 +279,7 @@ fn action_label(action: &str) -> &str {
 }
 
 fn save_last_run(action: &str, result: &Value) {
-    let Ok(data_dir) = env::var("MEDIARY_PLUGIN_DATA_DIR") else { return; };
-    let path = Path::new(&data_dir);
+    let Ok(path) = plugin_data_dir() else { return; };
     if fs::create_dir_all(path).is_err() { return; }
     let record = json!({"action": action, "ok": true, "notice": result.get("notice").and_then(Value::as_str).unwrap_or(""), "completed_at": unix_time()});
     let temp = path.join("last-run.json.tmp");
@@ -297,8 +296,8 @@ fn load_selection(settings: &Map<String, Value>) -> ContainerSelection {
         update_containers: names(setting(settings, "update_containers")),
         auto_update_containers: names(setting(settings, "auto_update_containers")),
     };
-    let Ok(data_dir) = env::var("MEDIARY_PLUGIN_DATA_DIR") else { return fallback; };
-    let Ok(raw) = fs::read_to_string(Path::new(&data_dir).join("container-selection.json")) else { return fallback; };
+    let Ok(data_dir) = plugin_data_dir() else { return fallback; };
+    let Ok(raw) = fs::read_to_string(data_dir.join("container-selection.json")) else { return fallback; };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else { return fallback; };
     ContainerSelection {
         update_containers: value_names(&value, "update_containers"),
@@ -307,9 +306,7 @@ fn load_selection(settings: &Map<String, Value>) -> ContainerSelection {
 }
 
 fn save_selection(selection: &ContainerSelection) -> Result<(), String> {
-    let data_dir = env::var("MEDIARY_PLUGIN_DATA_DIR").map_err(|_| "Mediary 未提供插件数据目录，无法保存容器选择".to_string())?;
-    let path = Path::new(&data_dir);
-    fs::create_dir_all(path).map_err(|_| "无法创建插件数据目录".to_string())?;
+    let path = plugin_data_dir()?;
     let record = json!({
         "update_containers": selection.update_containers.iter().cloned().collect::<Vec<_>>(),
         "auto_update_containers": selection.auto_update_containers.iter().cloned().collect::<Vec<_>>(),
@@ -317,6 +314,12 @@ fn save_selection(selection: &ContainerSelection) -> Result<(), String> {
     let temp = path.join("container-selection.json.tmp");
     fs::write(&temp, record.to_string()).map_err(|_| "无法写入容器选择".to_string())?;
     fs::rename(temp, path.join("container-selection.json")).map_err(|_| "无法保存容器选择".to_string())
+}
+
+fn plugin_data_dir() -> Result<std::path::PathBuf, String> {
+    let path = std::path::PathBuf::from(env::var("MEDIARY_PLUGIN_DATA_DIR").map_err(|_| "Mediary 未提供插件数据目录".to_string())?).join("data");
+    fs::create_dir_all(&path).map_err(|_| "无法创建插件数据目录".to_string())?;
+    Ok(path)
 }
 
 fn unix_time() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_secs()).unwrap_or(0) }

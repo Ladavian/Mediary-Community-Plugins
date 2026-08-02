@@ -2,7 +2,7 @@
   "api_version": 1,
   "id": "douban-coming",
   "name": "豆瓣将映",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "监控豆瓣即将开播电视剧，按想看人数筛选，提前创建订阅并发送开播提醒。",
   "action_runtime": {
     "entrypoint": "./plugin"
@@ -25,7 +25,7 @@
   "auto_grant_scopes": true,
   "data_view": {
     "title": "将映处理记录",
-    "file": "history.json",
+    "file": "data/history.json",
     "item_label": "剧集",
     "summary": [
       {"key": "runs", "label": "运行次数"},

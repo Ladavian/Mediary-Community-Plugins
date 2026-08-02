@@ -79,7 +79,7 @@ impl Context {
     fn from_env() -> Result<Self, String> {
         let api_url = required("MEDIARY_PLUGIN_API_URL")?.trim_end_matches('/').to_string();
         let token = required("MEDIARY_PLUGIN_TOKEN")?;
-        let data_dir = PathBuf::from(required("MEDIARY_PLUGIN_DATA_DIR")?);
+        let data_dir = PathBuf::from(required("MEDIARY_PLUGIN_DATA_DIR")?).join("data");
         fs::create_dir_all(&data_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
         let settings = env::var("MEDIARY_PLUGIN_SETTINGS_JSON").ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
         let client = Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
