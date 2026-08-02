@@ -2,7 +2,7 @@
   "api_version": 1,
   "id": "douban-coming",
   "name": "豆瓣将映",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "监控豆瓣即将开播电视剧，按想看人数筛选，提前创建订阅并发送开播提醒。",
   "action_runtime": {
     "entrypoint": "./plugin"

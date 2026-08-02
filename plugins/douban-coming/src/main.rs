@@ -144,7 +144,15 @@ fn parse_rss(xml: &str) -> Result<Vec<FeedItem>, String> {
     let mut buffer = Vec::new(); let mut field = String::new(); let mut current: Map<String, Value> = Map::new(); let mut output = Vec::new(); let mut in_item = false;
     loop { match reader.read_event_into(&mut buffer) {
         Ok(Event::Start(event)) => { let name = String::from_utf8_lossy(event.name().as_ref()).to_string(); if name == "item" { in_item = true; current.clear(); } else if in_item { field = name; } }
-        Ok(Event::Text(event)) => if in_item && !field.is_empty() { let text = event.unescape().map_err(|e| e.to_string())?.into_owned(); current.entry(field.clone()).and_modify(|value| value.as_str().map(|old| format!("{old}{text}")).map(|combined| *value = Value::String(combined))).or_insert(Value::String(text)); }
+        Ok(Event::Text(event)) => if in_item && !field.is_empty() {
+            let text = event.unescape().map_err(|e| e.to_string())?.into_owned();
+            if let Some(value) = current.get_mut(&field) {
+                let previous = value.as_str().unwrap_or_default();
+                *value = Value::String(format!("{previous}{text}"));
+            } else {
+                current.insert(field.clone(), Value::String(text));
+            }
+        }
         Ok(Event::CData(event)) => if in_item && !field.is_empty() { let text = String::from_utf8_lossy(event.as_ref()).to_string(); current.insert(field.clone(), Value::String(text)); }
         Ok(Event::End(event)) => { let name = String::from_utf8_lossy(event.name().as_ref()).to_string(); if name == "item" { let title = current.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string(); let link = current.get("link").and_then(Value::as_str).unwrap_or("").trim().to_string(); let description = current.get("description").and_then(Value::as_str).unwrap_or("").to_string(); if !title.is_empty() || !link.is_empty() { output.push(FeedItem { year: extract_year(&description), wish_count: extract_wish_count(&description), title, link, description }); } in_item = false; field.clear(); } else if name == field { field.clear(); } }
         Ok(Event::Eof) => break,
