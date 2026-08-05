@@ -8,7 +8,8 @@ Mediary Rust 版“豆瓣将映”。它从 RSSHub 的豆瓣将映电视剧路�
 
 ## 行为
 
-- 仅处理经 Mediary TMDB 解析后确认是剧集的结果；
+- 仅处理经 Mediary TMDB 解析后确认是剧集、且年份与 RSS 条目一致的结果；
+- 解析 RSSHub 分类字段中的年份并传给 TMDB，避免同名剧或续集错配；
 - 已存在的 Mediary 订阅不会重复创建；
 - 开播日期优先使用 TMDB 解析结果，缺失时回退 RSS 描述中的日期；
 - 提醒通过 `notifications:send` 发送，并在插件数据中去重；

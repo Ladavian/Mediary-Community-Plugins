@@ -98,6 +98,12 @@ async fn refresh(context: &Context) -> Result<Report, String> {
         report.considered += 1;
         let resolved = match resolve(context, &item).await { Ok(value) => value, Err(error) => { report.failures.push(format!("{}: {error}", item.title)); continue; } };
         if resolved.media_type.trim().to_ascii_lowercase() != "tv" { report.skipped += 1; continue; }
+        if let (Some(feed_year), Some(resolved_year)) = (item.year, resolved.year) {
+            if feed_year != resolved_year {
+                report.failures.push(format!("{}: TMDB 年份不一致（RSS {feed_year}，TMDB {resolved_year}）", item.title));
+                continue;
+            }
+        }
         let title = if resolved.title.trim().is_empty() { item.title.clone() } else { resolved.title.clone() };
         let air_date = media_air_date(&resolved).or_else(|| extract_date(&item.description)).map(|date| date.format("%Y-%m-%d").to_string());
         let key = subscription_key(&resolved.tmdb_id, 1);
@@ -154,7 +160,7 @@ fn parse_rss(xml: &str) -> Result<Vec<FeedItem>, String> {
             }
         }
         Ok(Event::CData(event)) => if in_item && !field.is_empty() { let text = String::from_utf8_lossy(event.as_ref()).to_string(); current.insert(field.clone(), Value::String(text)); }
-        Ok(Event::End(event)) => { let name = String::from_utf8_lossy(event.name().as_ref()).to_string(); if name == "item" { let title = current.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string(); let link = current.get("link").and_then(Value::as_str).unwrap_or("").trim().to_string(); let description = current.get("description").and_then(Value::as_str).unwrap_or("").to_string(); if !title.is_empty() || !link.is_empty() { output.push(FeedItem { year: extract_year(&description), wish_count: extract_wish_count(&description), title, link, description }); } in_item = false; field.clear(); } else if name == field { field.clear(); } }
+        Ok(Event::End(event)) => { let name = String::from_utf8_lossy(event.name().as_ref()).to_string(); if name == "item" { let title = current.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string(); let link = current.get("link").and_then(Value::as_str).unwrap_or("").trim().to_string(); let description = current.get("description").and_then(Value::as_str).unwrap_or("").to_string(); let category = current.get("category").and_then(Value::as_str).unwrap_or(""); if !title.is_empty() || !link.is_empty() { output.push(FeedItem { year: extract_year(category).or_else(|| extract_year(&description)), wish_count: extract_wish_count(&description), title, link, description }); } in_item = false; field.clear(); } else if name == field { field.clear(); } }
         Ok(Event::Eof) => break,
         Err(error) => return Err(format!("解析 RSS 失败: {error}")),
         _ => {}
@@ -202,4 +208,4 @@ fn load_json<T: for<'a> Deserialize<'a> + Default>(path: &Path) -> T { fs::read_
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> { let temp = path.with_extension("tmp"); fs::write(&temp, serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?; fs::rename(temp, path).map_err(|e| e.to_string()) }
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn extracts_feed_values() { assert_eq!(extract_wish_count("已有 12,345 人想看"), 12345); assert_eq!(extract_date("首播 2026-08-02"), NaiveDate::from_ymd_opt(2026, 8, 2)); assert_eq!(extract_year("2027 中国大陆"), Some(2027)); } #[test] fn parses_rss_items() { let feed = "<rss><channel><item><title>剧集</title><link>https://movie.douban.com/subject/1/</link><description>5000人想看 2027</description></item></channel></rss>"; let items = parse_rss(feed).unwrap(); assert_eq!(items.len(), 1); assert_eq!(items[0].wish_count, 5000); } }
+mod tests { use super::*; #[test] fn extracts_feed_values() { assert_eq!(extract_wish_count("已有 12,345 人想看"), 12345); assert_eq!(extract_date("首播 2026-08-02"), NaiveDate::from_ymd_opt(2026, 8, 2)); assert_eq!(extract_year("2027 中国大陆"), Some(2027)); } #[test] fn parses_rss_items() { let feed = "<rss><channel><item><title>剧集</title><link>https://movie.douban.com/subject/1/</link><description>5000人想看</description><category>2027 / 中国大陆</category></item></channel></rss>"; let items = parse_rss(feed).unwrap(); assert_eq!(items.len(), 1); assert_eq!(items[0].wish_count, 5000); assert_eq!(items[0].year, Some(2027)); } }
