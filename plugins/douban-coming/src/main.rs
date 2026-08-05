@@ -86,6 +86,7 @@ impl Context {
         let client = Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
         let douban_client = Client::builder()
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
             .build().map_err(|e| e.to_string())?;
         Ok(Self { api_url, token, data_dir, client, douban_client, settings })
@@ -101,36 +102,42 @@ async fn refresh(context: &Context) -> Result<Report, String> {
     for item in items {
         if item.wish_count < setting_i64(context, "wish_count_threshold", 5000).max(0) { report.skipped += 1; continue; }
         report.considered += 1;
-        let resolved = match resolve(context, &item).await { Ok(value) => value, Err(error) => { report.failures.push(format!("{}: {error}", item.title)); continue; } };
+        let season = extract_season_from_title(&item.title).unwrap_or(1);
+        let search_title = strip_season_suffix(&item.title);
+        let resolved = match resolve(context, &item, &search_title).await { Ok(value) => value, Err(error) => { report.failures.push(format!("{}: {error}", item.title)); continue; } };
         if resolved.media_type.trim().to_ascii_lowercase() != "tv" { report.skipped += 1; continue; }
-        if let (Some(feed_year), Some(resolved_year)) = (item.year, resolved.year) {
-            if feed_year != resolved_year {
-                report.failures.push(format!("{}: TMDB 年份不一致（RSS {feed_year}，TMDB {resolved_year}）", item.title));
-                continue;
+        if season <= 1 {
+            if let (Some(feed_year), Some(resolved_year)) = (item.year, resolved.year) {
+                if feed_year != resolved_year {
+                    report.failures.push(format!("{}: TMDB 年份不一致（RSS {feed_year}，TMDB {resolved_year}）", item.title));
+                    continue;
+                }
             }
         }
         let title = if resolved.title.trim().is_empty() { item.title.clone() } else { resolved.title.clone() };
         let air_date = if let Some(date) = media_air_date(&resolved).or_else(|| extract_date(&item.description)) {
             Some(date)
+        } else if let Some(date) = fetch_tmdb_details_air_date(context, &resolved.tmdb_id).await {
+            Some(date)
         } else {
             fetch_douban_air_date(context, &item.link).await.ok().flatten()
         }.map(|date| date.format("%Y-%m-%d").to_string());
-        let key = subscription_key(&resolved.tmdb_id, 1);
+        let key = subscription_key(&resolved.tmdb_id, season);
         let days = air_date.as_deref().and_then(days_until);
         let mut subscription = "已存在".to_string();
         let mut created = false;
         if !existing.contains(&key) && days.is_some_and(|value| value >= 0 && value <= setting_i64(context, "advance_days", 7).max(0)) {
-            if let Err(error) = create_subscription(context, &item, &resolved).await { report.failures.push(format!("{title}: 创建订阅失败: {error}")); continue; }
+            if let Err(error) = create_subscription(context, &item, &resolved, season).await { report.failures.push(format!("{title}: 创建订阅失败: {error}")); continue; }
             existing.insert(key);
             history.subscribed += 1;
             report.subscribed += 1;
             subscription = "已创建".to_string();
             created = true;
-        } else if !existing.contains(&subscription_key(&resolved.tmdb_id, 1)) { subscription = if days.is_none() { "日期未知".to_string() } else { "未到订阅窗口".to_string() }; }
+        } else if !existing.contains(&subscription_key(&resolved.tmdb_id, season)) { subscription = if days.is_none() { "日期未知".to_string() } else { "未到订阅窗口".to_string() }; }
         let mut reminder = "未提醒".to_string();
         let notice_key = format!("{}:{}", resolved.tmdb_id, air_date.clone().unwrap_or_default());
         if setting_bool(context, "notify_before_air", true) && !history.notified.contains(&notice_key) && air_date.as_deref().and_then(hours_until).is_some_and(|value| value >= 0.0 && value <= setting_i64(context, "notify_hours", 24).max(1) as f64) {
-            let content = format!("名称：{title}\n开播日期：{}\n想看人数：{}\n订阅状态：{}\n豆瓣链接：{}", air_date.clone().unwrap_or_else(|| "-".into()), item.wish_count, if created || existing.contains(&subscription_key(&resolved.tmdb_id, 1)) { "已订阅" } else { "未订阅" }, item.link);
+            let content = format!("名称：{title}\n开播日期：{}\n想看人数：{}\n订阅状态：{}\n豆瓣链接：{}", air_date.clone().unwrap_or_else(|| "-".into()), item.wish_count, if created || existing.contains(&subscription_key(&resolved.tmdb_id, season)) { "已订阅" } else { "未订阅" }, item.link);
             send_notification(context, "豆瓣将映提醒", &content, resolved.poster_path.as_deref()).await?;
             history.notified.insert(notice_key);
             history.notifications += 1;
@@ -146,11 +153,40 @@ async fn refresh(context: &Context) -> Result<Report, String> {
     Ok(report)
 }
 
+async fn fetch_tmdb_details_air_date(context: &Context, tmdb_id: &str) -> Option<NaiveDate> {
+    if tmdb_id.trim().is_empty() { return None; }
+    let path = format!("/search/tmdb/details?id={}&media_type=tv", tmdb_id.trim());
+    let response = api_get(context, &path).await.ok()?;
+    // 1) 季级优先：seasons 中 air_date 非空且 season_number 最大（对应最近开播的一季）
+    if let Some(seasons) = response.get("seasons").and_then(Value::as_array) {
+        let mut latest: Option<(i64, NaiveDate)> = None;
+        for season in seasons {
+            let number = season.get("season_number").and_then(Value::as_i64).unwrap_or(0);
+            if let Some(date) = season.get("air_date").and_then(Value::as_str).and_then(extract_date) {
+                if latest.map_or(true, |(current, _)| number >= current) { latest = Some((number, date)); }
+            }
+        }
+        if let Some((_, date)) = latest { return Some(date); }
+    }
+    // 2) 剧级 first_air_date
+    if let Some(date) = response.get("details").and_then(|value| value.get("first_air_date")).and_then(Value::as_str).and_then(extract_date) {
+        return Some(date);
+    }
+    // 3) 下一集开播日期
+    if let Some(date) = response.get("details").and_then(|value| value.get("next_episode_to_air")).and_then(|value| value.get("air_date")).and_then(Value::as_str).and_then(extract_date) {
+        return Some(date);
+    }
+    None
+}
+
 async fn fetch_douban_air_date(context: &Context, link: &str) -> Result<Option<NaiveDate>, String> {
     if !link.starts_with("https://movie.douban.com/") { return Ok(None); }
     let url = link.replace("https://movie.douban.com/", "https://m.douban.com/movie/");
     let response = context.douban_client.get(url).header("Accept-Language", "zh-CN,zh;q=0.9").send().await.map_err(|e| format!("请求豆瓣详情页失败: {e}"))?;
-    if !response.status().is_success() { return Err(format!("豆瓣详情页返回 HTTP {}", response.status())); }
+    // 豆瓣移动版返回 302 但 body 是完整页面（重定向目标是反爬验证页，不能跟随）
+    if !response.status().is_success() && response.status() != reqwest::StatusCode::FOUND && response.status() != reqwest::StatusCode::MOVED_PERMANENTLY {
+        return Err(format!("豆瓣详情页返回 HTTP {}", response.status()));
+    }
     let html = response.text().await.map_err(|e| format!("读取豆瓣详情页失败: {e}"))?;
     Ok(extract_douban_date(&html))
 }
@@ -163,6 +199,39 @@ fn extract_douban_date(html: &str) -> Option<NaiveDate> {
     } else {
         NaiveDate::from_ymd_opt(captures.get(4)?.as_str().parse().ok()?, captures.get(5)?.as_str().parse().ok()?, captures.get(6)?.as_str().parse().ok()?)
     }
+}
+
+fn chinese_to_int(text: &str) -> Option<i64> {
+    if let Ok(value) = text.parse::<i64>() { return (value > 0).then_some(value); }
+    let digits = [("一", 1), ("二", 2), ("三", 3), ("四", 4), ("五", 5), ("六", 6), ("七", 7), ("八", 8), ("九", 9), ("十", 10)];
+    if let Some((_, value)) = digits.iter().find(|(character, _)| *character == text) { return Some(*value); }
+    if let Some(rest) = text.strip_prefix('十') { return Some(10 + chinese_to_int(rest).unwrap_or(0)); }
+    if let Some(index) = text.find('十') {
+        let (head, tail) = text.split_at(index);
+        let head_value = if head.is_empty() { 1 } else { chinese_to_int(head).unwrap_or(0) };
+        let tail_value = chinese_to_int(&tail[1..]).unwrap_or(0);
+        let value = head_value * 10 + tail_value;
+        return (value > 0).then_some(value);
+    }
+    None
+}
+
+fn extract_season_from_title(title: &str) -> Option<i64> {
+    let patterns = [r"[第\s]*([0-9]{1,2})\s*季", r"第([一二三四五六七八九十]{1,3})季", r"\bS\s*([0-9]{1,2})\b", r"\bSeason\s*([0-9]{1,2})\b"];
+    for pattern in patterns {
+        let Ok(regex) = Regex::new(pattern) else { continue };
+        let Some(captures) = regex.captures(title) else { continue };
+        let Some(matched) = captures.get(1) else { continue };
+        let raw = matched.as_str();
+        let value = if raw.chars().all(|character| character.is_ascii_digit()) { raw.parse::<i64>().ok() } else { chinese_to_int(raw) };
+        if value.is_some_and(|number| number > 0) { return value; }
+    }
+    None
+}
+
+fn strip_season_suffix(title: &str) -> String {
+    let Ok(regex) = Regex::new(r"[\s　]*(?:[第\s]*[0-9一二三四五六七八九十]{1,3}\s*季|[Ss]\s*\d{1,2}|Season\s*\d{1,2})") else { return title.trim().to_string() };
+    regex.replace(title, "").trim().to_string()
 }
 
 async fn fetch_feed(context: &Context) -> Result<Vec<FeedItem>, String> {
@@ -196,8 +265,18 @@ fn parse_rss(xml: &str) -> Result<Vec<FeedItem>, String> {
     Ok(output)
 }
 
-async fn resolve(context: &Context, item: &FeedItem) -> Result<ResolvedMedia, String> {
-    let response = api_post(context, "/tmdb/resolve", json!({"title": item.title, "year": item.year, "media_type": "tv"})).await?;
+async fn resolve(context: &Context, item: &FeedItem, search_title: &str) -> Result<ResolvedMedia, String> {
+    let mut payload = json!({"title": search_title, "media_type": "tv"});
+    if let Some(year) = item.year { payload["year"] = json!(year); }
+    match resolve_payload(context, &payload).await {
+        Ok(media) => Ok(media),
+        // 续季剧的 RSS 年份是下一季年份，与 TMDB 主条目不一致时会 404，去掉年份重试
+        Err(_) => resolve_payload(context, &json!({"title": search_title, "media_type": "tv"})).await
+    }
+}
+
+async fn resolve_payload(context: &Context, payload: &Value) -> Result<ResolvedMedia, String> {
+    let response = api_post(context, "/tmdb/resolve", payload.clone()).await?;
     if response.get("status").and_then(Value::as_str) == Some("failed") { return Err(response.get("message").and_then(Value::as_str).unwrap_or("TMDB 未匹配").into()); }
     serde_json::from_value(response.get("data").cloned().unwrap_or(response)).map_err(|e| format!("TMDB 响应格式无效: {e}"))
 }
@@ -211,8 +290,8 @@ async fn existing_subscriptions(context: &Context) -> Result<HashSet<String>, St
     }).collect())
 }
 
-async fn create_subscription(context: &Context, item: &FeedItem, media: &ResolvedMedia) -> Result<(), String> {
-    api_post(context, "/subscriptions", json!({"tmdb_id": media.tmdb_id, "name": if media.title.trim().is_empty() { &item.title } else { &media.title }, "year": media.year.or(item.year), "season": 1, "media_type": "tv", "poster_path": media.poster_path.as_deref(), "backdrop_path": media.backdrop_path.as_deref(), "vote_average": media.vote_average, "description": media.description.as_deref(), "expected_episodes": media.expected_episodes})).await.map(|_| ())
+async fn create_subscription(context: &Context, item: &FeedItem, media: &ResolvedMedia, season: i64) -> Result<(), String> {
+    api_post(context, "/subscriptions", json!({"tmdb_id": media.tmdb_id, "name": if media.title.trim().is_empty() { &item.title } else { &media.title }, "year": media.year.or(item.year), "season": season, "media_type": "tv", "poster_path": media.poster_path.as_deref(), "backdrop_path": media.backdrop_path.as_deref(), "vote_average": media.vote_average, "description": media.description.as_deref(), "expected_episodes": media.expected_episodes})).await.map(|_| ())
 }
 
 async fn send_notification(context: &Context, title: &str, content: &str, image_url: Option<&str>) -> Result<(), String> { api_post(context, "/plugin/notifications", json!({"title": title, "content": content, "image_url": image_url})).await.map(|_| ()) }
@@ -236,4 +315,4 @@ fn load_json<T: for<'a> Deserialize<'a> + Default>(path: &Path) -> T { fs::read_
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> { let temp = path.with_extension("tmp"); fs::write(&temp, serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?; fs::rename(temp, path).map_err(|e| e.to_string()) }
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn extracts_feed_values() { assert_eq!(extract_wish_count("已有 12,345 人想看"), 12345); assert_eq!(extract_date("首播 2026-08-02"), NaiveDate::from_ymd_opt(2026, 8, 2)); assert_eq!(extract_year("2027 中国大陆"), Some(2027)); } #[test] fn extracts_douban_page_date() { assert_eq!(extract_douban_date(r#"<span class="pl">首播:</span> 2026-08-20(中国大陆) <br/>"#), NaiveDate::from_ymd_opt(2026, 8, 20)); assert_eq!(extract_douban_date(r#"<span class="pl">上映日期:</span> 2026年9月1日 <br/>"#), NaiveDate::from_ymd_opt(2026, 9, 1)); assert_eq!(extract_douban_date(r#"中国大陆 / 剧情 / 古装 / 2026-08-09(中国大陆)上映 / 片长45分钟"#), NaiveDate::from_ymd_opt(2026, 8, 9)); assert_eq!(extract_douban_date("<p>没有日期</p>"), None); } #[test] fn parses_rss_items() { let feed = "<rss><channel><item><title>剧集</title><link>https://movie.douban.com/subject/1/</link><description>5000人想看</description><category>2027 / 中国大陆</category></item></channel></rss>"; let items = parse_rss(feed).unwrap(); assert_eq!(items.len(), 1); assert_eq!(items[0].wish_count, 5000); assert_eq!(items[0].year, Some(2027)); } }
+mod tests { use super::*; #[test] fn extracts_feed_values() { assert_eq!(extract_wish_count("已有 12,345 人想看"), 12345); assert_eq!(extract_date("首播 2026-08-02"), NaiveDate::from_ymd_opt(2026, 8, 2)); assert_eq!(extract_year("2027 中国大陆"), Some(2027)); } #[test] fn extracts_douban_page_date() { assert_eq!(extract_douban_date(r#"<span class="pl">首播:</span> 2026-08-20(中国大陆) <br/>"#), NaiveDate::from_ymd_opt(2026, 8, 20)); assert_eq!(extract_douban_date(r#"<span class="pl">上映日期:</span> 2026年9月1日 <br/>"#), NaiveDate::from_ymd_opt(2026, 9, 1)); assert_eq!(extract_douban_date(r#"中国大陆 / 剧情 / 古装 / 2026-08-09(中国大陆)上映 / 片长45分钟"#), NaiveDate::from_ymd_opt(2026, 8, 9)); assert_eq!(extract_douban_date("<p>没有日期</p>"), None); } #[test] fn parses_rss_items() { let feed = "<rss><channel><item><title>剧集</title><link>https://movie.douban.com/subject/1/</link><description>5000人想看</description><category>2027 / 中国大陆</category></item></channel></rss>"; let items = parse_rss(feed).unwrap(); assert_eq!(items.len(), 1); assert_eq!(items[0].wish_count, 5000); assert_eq!(items[0].year, Some(2027)); } #[test] fn extracts_season_from_titles() { assert_eq!(extract_season_from_title("人生复本 第二季"), Some(2)); assert_eq!(extract_season_from_title("流人 第六季"), Some(6)); assert_eq!(extract_season_from_title("花开锦绣"), None); assert_eq!(extract_season_from_title("黑镜 S7"), Some(7)); assert_eq!(extract_season_from_title("白莲花度假村 Season 3"), Some(3)); assert_eq!(strip_season_suffix("人生复本 第二季"), "人生复本"); assert_eq!(strip_season_suffix("流人 第六季"), "流人"); assert_eq!(strip_season_suffix("花开锦绣"), "花开锦绣"); } }
