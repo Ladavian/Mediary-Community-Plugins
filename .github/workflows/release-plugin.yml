@@ -106,6 +106,28 @@ jobs:
             SHA256SUMS \
             --title "${{ steps.plugin.outputs.id }} ${{ steps.plugin.outputs.version }}" \
             --notes "Automated Mediary plugin release."
+      - name: Clean up old releases (keep latest 2 per plugin)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plugin_id="${{ steps.plugin.outputs.id }}"
+          # 该插件所有 release 按版本号排序，删除除最新 2 个以外的（连同对应 tag）
+          stale_tags="$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name | startswith(\"${plugin_id}-v\")) | .tag_name]
+                   | sort_by(. | gsub(\".*-v\";\"\") | split(\".\") | map(tonumber))
+                   | .[:-2][]")"
+          if [ -n "$stale_tags" ]; then
+            echo "$stale_tags" | while read -r tag; do
+              [ -z "$tag" ] && continue
+              release_id="$(gh api "repos/${{ github.repository }}/releases/tags/${tag}" --jq '.id')"
+              echo "删除旧版本: ${tag}"
+              gh api -X DELETE "repos/${{ github.repository }}/releases/${release_id}" >/dev/null
+              gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${tag}" >/dev/null || true
+            done
+          else
+            echo "无需清理（该插件不超过 2 个版本）"
+          fi
       - name: Open Mediary catalog PR
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_catalog }}
         env:
