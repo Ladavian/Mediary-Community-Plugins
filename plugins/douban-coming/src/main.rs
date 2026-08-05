@@ -181,6 +181,10 @@ async fn refresh(context: &Context) -> Result<Report, String> {
             report.subscribed += 1;
             subscription = "已创建".to_string();
             created = true;
+            // 订阅创建成功立即发通知
+            if let Err(error) = send_notification(context, "豆瓣将映 · 订阅已创建", &format!("名称：{title}\n开播日期：{}\n想看人数：{}\n豆瓣链接：{}", air_date.clone().unwrap_or_else(|| "-".into()), item.wish_count, item.link), resolved.poster_path.as_deref()).await {
+                report.failures.push(format!("{title}: 发送订阅通知失败: {error}"));
+            }
         } else if !existing.contains(&subscription_key(&resolved.tmdb_id, season)) { subscription = if days.is_none() { "日期未知".to_string() } else { "未到订阅窗口".to_string() }; }
         let mut reminder = "未提醒".to_string();
         let notice_key = format!("{}:{}", resolved.tmdb_id, air_date.clone().unwrap_or_default());
