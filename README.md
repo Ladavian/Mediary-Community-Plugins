@@ -14,6 +14,9 @@
 
 1. 在插件目录更新 `plugin.json` 的版本，并确保 `plugin-source.json` 中的二进制名、作者、权限和兼容版本正确。
 2. 推送标签：`<plugin-id>-v<version>`，例如 `dockercopilot-helper-v1.0.4`。
+
+> **版本号规则**：patch 位不超过 9。`1.0.9` 之后的下一个版本进 minor 为 `1.1.0`，
+> 不使用 `1.0.10`；同理 `1.1.9` 之后为 `1.2.0`。Release 清理步骤按语义版本排序，自动保留每个插件最新 2 个版本。
 3. GitHub Actions 自动运行测试、构建 Linux AMD64 安装包、生成 SHA-256 并创建不可变 Release。
 4. 如已配置 `MEDIARY_STORE_TOKEN`，同一工作流会更新 `Ladavian/Mediary-Plugins` Fork，并向官方商店自动创建草稿 PR。
 
