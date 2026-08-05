@@ -96,6 +96,12 @@ impl DockerCopilot {
         decode(response).await
     }
 
+    async fn post_form(&self, path: &str, fields: &[(&str, &str)]) -> Result<Value, String> {
+        // Docker Copilot 的 /api/container/{id}/update 接收 form 表单字段（imageNameAndTag / containerName），不是 JSON
+        let response = self.client.post(self.endpoint(path)?).header("Authorization", self.bearer()?).form(fields).send().await.map_err(network_error)?;
+        decode(response).await
+    }
+
     async fn delete(&self, path: &str) -> Result<Value, String> {
         let response = self.client.delete(self.endpoint(path)?).header("Authorization", self.bearer()?).send().await.map_err(network_error)?;
         decode(response).await
@@ -190,7 +196,8 @@ async fn auto_update(dc: &DockerCopilot, settings: &Map<String, Value>) -> Resul
     let mut cleaned = Vec::new();
     if setting_bool(settings, "clean_unused_images", false) {
         for image in dc.images().await? {
-            if !is_in_use(&image) && is_untagged(&image) {
+            // Docker Copilot 无标签/悬挂镜像的 tag 是字符串 "None"，这里直接清理所有未被容器使用的镜像
+            if !is_in_use(&image) {
                 let id = text(&image, "id");
                 if !id.is_empty() {
                     let response = dc.delete(&format!("api/image/{id}?force=false")).await?;
@@ -213,7 +220,7 @@ async fn auto_update(dc: &DockerCopilot, settings: &Map<String, Value>) -> Resul
         }
         let id = text(&container, "id");
         if id.is_empty() { skipped.push(json!({"name": name, "reason": "容器缺少 ID"})); continue; }
-        let response = dc.post(&format!("api/container/{id}/update"), json!({"containerName": name, "imageNameAndTag": image})).await?;
+        let response = dc.post_form(&format!("api/container/{id}/update"), &[("containerName", name.as_str()), ("imageNameAndTag", image.as_str())]).await?;
         if response.get("code").and_then(Value::as_i64) == Some(200) && message(&response) == "success" {
             let mut item = json!({"name": name, "status": "任务已创建"});
             if setting_bool(settings, "track_progress", true) {
@@ -222,7 +229,8 @@ async fn auto_update(dc: &DockerCopilot, settings: &Map<String, Value>) -> Resul
             updated.push(item);
         } else { skipped.push(json!({"name": name, "reason": message(&response)})); }
     }
-    let notice = format!("自动更新完成：创建 {} 个任务，跳过 {} 个容器，清理 {} 个镜像。", updated.len(), skipped.len(), cleaned.len());
+    let skipped_detail = skipped.iter().filter_map(|value| value.get("name").and_then(Value::as_str)).take(5).collect::<Vec<_>>().join("、");
+    let notice = format!("自动更新完成：创建 {} 个任务，跳过 {} 个容器{}，清理 {} 个镜像。", updated.len(), skipped.len(), if skipped_detail.is_empty() { String::new() } else { format!("（{}）", skipped_detail) }, cleaned.len());
     Ok(json!({"notice": notice, "report": {"cleaned_images": cleaned, "updated": updated, "skipped": skipped}}))
 }
 
@@ -331,7 +339,6 @@ fn name(value: &Value) -> String { text(value, "name") }
 fn message(value: &Value) -> String { text(value, "msg") }
 fn has_update(value: &Value) -> bool { value.get("haveUpdate").and_then(Value::as_bool).unwrap_or(false) }
 fn is_in_use(value: &Value) -> bool { value.get("inUsed").and_then(Value::as_bool).unwrap_or(false) }
-fn is_untagged(value: &Value) -> bool { match value.get("tag") { None | Some(Value::Null) => true, Some(Value::String(tag)) => tag.trim().is_empty() || tag == "<none>", Some(Value::Array(tags)) => tags.is_empty(), _ => false } }
 fn names(raw: &str) -> std::collections::HashSet<String> { raw.split(',').map(str::trim).filter(|name| !name.is_empty()).map(ToOwned::to_owned).collect() }
 fn value_names(value: &Value, key: &str) -> std::collections::HashSet<String> { value.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::trim).filter(|name| !name.is_empty()).map(ToOwned::to_owned).collect() }
 fn payload_names(payload: &Value, key: &str, available: &std::collections::HashSet<String>) -> std::collections::HashSet<String> { value_names(payload, key).into_iter().filter(|name| available.contains(name)).collect() }
@@ -341,10 +348,10 @@ fn container_summary(value: &Value) -> Value { json!({"name": name(value), "imag
 mod tests {
     use super::*;
     #[test]
-    fn identifies_untagged_images_without_deleting_tagged_ones() {
-        assert!(is_untagged(&json!({"tag": "<none>"})));
-        assert!(is_untagged(&json!({"tag": []})));
-        assert!(!is_untagged(&json!({"tag": "linuxserver/emby:latest"})));
+    fn cleans_unused_images_only() {
+        assert!(is_in_use(&json!({"inUsed": true})));
+        assert!(!is_in_use(&json!({"inUsed": false})));
+        assert!(!is_in_use(&json!({"inUsed": false, "tag": "None"})));
     }
     #[test]
     fn parses_container_lists_without_empty_names() {
