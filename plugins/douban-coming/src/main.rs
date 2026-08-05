@@ -15,6 +15,7 @@ struct Context {
     token: String,
     data_dir: PathBuf,
     client: Client,
+    douban_client: Client,
     settings: Map<String, Value>,
 }
 
@@ -79,11 +80,15 @@ impl Context {
     fn from_env() -> Result<Self, String> {
         let api_url = required("MEDIARY_PLUGIN_API_URL")?.trim_end_matches('/').to_string();
         let token = required("MEDIARY_PLUGIN_TOKEN")?;
-        let data_dir = PathBuf::from(required("MEDIARY_PLUGIN_DATA_DIR")?).join("data");
+        let data_dir = PathBuf::from(required("MEDIARY_PLUGIN_DATA_DIR")?);
         fs::create_dir_all(&data_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
         let settings = env::var("MEDIARY_PLUGIN_SETTINGS_JSON").ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
         let client = Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(30)).build().map_err(|e| e.to_string())?;
-        Ok(Self { api_url, token, data_dir, client, settings })
+        let douban_client = Client::builder()
+            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+            .timeout(Duration::from_secs(10))
+            .build().map_err(|e| e.to_string())?;
+        Ok(Self { api_url, token, data_dir, client, douban_client, settings })
     }
 }
 
@@ -105,7 +110,11 @@ async fn refresh(context: &Context) -> Result<Report, String> {
             }
         }
         let title = if resolved.title.trim().is_empty() { item.title.clone() } else { resolved.title.clone() };
-        let air_date = media_air_date(&resolved).or_else(|| extract_date(&item.description)).map(|date| date.format("%Y-%m-%d").to_string());
+        let air_date = if let Some(date) = media_air_date(&resolved).or_else(|| extract_date(&item.description)) {
+            Some(date)
+        } else {
+            fetch_douban_air_date(context, &item.link).await.ok().flatten()
+        }.map(|date| date.format("%Y-%m-%d").to_string());
         let key = subscription_key(&resolved.tmdb_id, 1);
         let days = air_date.as_deref().and_then(days_until);
         let mut subscription = "已存在".to_string();
@@ -117,7 +126,7 @@ async fn refresh(context: &Context) -> Result<Report, String> {
             report.subscribed += 1;
             subscription = "已创建".to_string();
             created = true;
-        } else if !existing.contains(&subscription_key(&resolved.tmdb_id, 1)) { subscription = "未到订阅窗口".to_string(); }
+        } else if !existing.contains(&subscription_key(&resolved.tmdb_id, 1)) { subscription = if days.is_none() { "日期未知".to_string() } else { "未到订阅窗口".to_string() }; }
         let mut reminder = "未提醒".to_string();
         let notice_key = format!("{}:{}", resolved.tmdb_id, air_date.clone().unwrap_or_default());
         if setting_bool(context, "notify_before_air", true) && !history.notified.contains(&notice_key) && air_date.as_deref().and_then(hours_until).is_some_and(|value| value >= 0.0 && value <= setting_i64(context, "notify_hours", 24).max(1) as f64) {
@@ -135,6 +144,25 @@ async fn refresh(context: &Context) -> Result<Report, String> {
     while history.records.len() > MAX_RECORDS { history.records.pop_back(); }
     write_json(&history_path, &history)?;
     Ok(report)
+}
+
+async fn fetch_douban_air_date(context: &Context, link: &str) -> Result<Option<NaiveDate>, String> {
+    if !link.starts_with("https://movie.douban.com/") { return Ok(None); }
+    let url = link.replace("https://movie.douban.com/", "https://m.douban.com/movie/");
+    let response = context.douban_client.get(url).header("Accept-Language", "zh-CN,zh;q=0.9").send().await.map_err(|e| format!("请求豆瓣详情页失败: {e}"))?;
+    if !response.status().is_success() { return Err(format!("豆瓣详情页返回 HTTP {}", response.status())); }
+    let html = response.text().await.map_err(|e| format!("读取豆瓣详情页失败: {e}"))?;
+    Ok(extract_douban_date(&html))
+}
+
+fn extract_douban_date(html: &str) -> Option<NaiveDate> {
+    let regex = Regex::new(r"(?:首播|上映日期|上映时间|开播)\s*[:：]?[\s\S]{0,60}?((?:19|20)\d{2})[-/年.](\d{1,2})[-/月.](\d{1,2})|((?:19|20)\d{2})[-/年.](\d{1,2})[-/月.](\d{1,2})\s*\([^)]{0,12}\)\s*上映").ok()?;
+    let captures = regex.captures(html)?;
+    if captures.get(1).is_some() {
+        NaiveDate::from_ymd_opt(captures.get(1)?.as_str().parse().ok()?, captures.get(2)?.as_str().parse().ok()?, captures.get(3)?.as_str().parse().ok()?)
+    } else {
+        NaiveDate::from_ymd_opt(captures.get(4)?.as_str().parse().ok()?, captures.get(5)?.as_str().parse().ok()?, captures.get(6)?.as_str().parse().ok()?)
+    }
 }
 
 async fn fetch_feed(context: &Context) -> Result<Vec<FeedItem>, String> {
@@ -208,4 +236,4 @@ fn load_json<T: for<'a> Deserialize<'a> + Default>(path: &Path) -> T { fs::read_
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> { let temp = path.with_extension("tmp"); fs::write(&temp, serde_json::to_vec(value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?; fs::rename(temp, path).map_err(|e| e.to_string()) }
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn extracts_feed_values() { assert_eq!(extract_wish_count("已有 12,345 人想看"), 12345); assert_eq!(extract_date("首播 2026-08-02"), NaiveDate::from_ymd_opt(2026, 8, 2)); assert_eq!(extract_year("2027 中国大陆"), Some(2027)); } #[test] fn parses_rss_items() { let feed = "<rss><channel><item><title>剧集</title><link>https://movie.douban.com/subject/1/</link><description>5000人想看</description><category>2027 / 中国大陆</category></item></channel></rss>"; let items = parse_rss(feed).unwrap(); assert_eq!(items.len(), 1); assert_eq!(items[0].wish_count, 5000); assert_eq!(items[0].year, Some(2027)); } }
+mod tests { use super::*; #[test] fn extracts_feed_values() { assert_eq!(extract_wish_count("已有 12,345 人想看"), 12345); assert_eq!(extract_date("首播 2026-08-02"), NaiveDate::from_ymd_opt(2026, 8, 2)); assert_eq!(extract_year("2027 中国大陆"), Some(2027)); } #[test] fn extracts_douban_page_date() { assert_eq!(extract_douban_date(r#"<span class="pl">首播:</span> 2026-08-20(中国大陆) <br/>"#), NaiveDate::from_ymd_opt(2026, 8, 20)); assert_eq!(extract_douban_date(r#"<span class="pl">上映日期:</span> 2026年9月1日 <br/>"#), NaiveDate::from_ymd_opt(2026, 9, 1)); assert_eq!(extract_douban_date(r#"中国大陆 / 剧情 / 古装 / 2026-08-09(中国大陆)上映 / 片长45分钟"#), NaiveDate::from_ymd_opt(2026, 8, 9)); assert_eq!(extract_douban_date("<p>没有日期</p>"), None); } #[test] fn parses_rss_items() { let feed = "<rss><channel><item><title>剧集</title><link>https://movie.douban.com/subject/1/</link><description>5000人想看</description><category>2027 / 中国大陆</category></item></channel></rss>"; let items = parse_rss(feed).unwrap(); assert_eq!(items.len(), 1); assert_eq!(items[0].wish_count, 5000); assert_eq!(items[0].year, Some(2027)); } }

@@ -317,7 +317,7 @@ fn save_selection(selection: &ContainerSelection) -> Result<(), String> {
 }
 
 fn plugin_data_dir() -> Result<std::path::PathBuf, String> {
-    let path = std::path::PathBuf::from(env::var("MEDIARY_PLUGIN_DATA_DIR").map_err(|_| "Mediary 未提供插件数据目录".to_string())?).join("data");
+    let path = std::path::PathBuf::from(env::var("MEDIARY_PLUGIN_DATA_DIR").map_err(|_| "Mediary 未提供插件数据目录".to_string())?);
     fs::create_dir_all(&path).map_err(|_| "无法创建插件数据目录".to_string())?;
     Ok(path)
 }
