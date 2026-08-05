@@ -44,6 +44,7 @@ struct Record {
     subscription: String,
     reminder: String,
     processed_at: String,
+    #[serde(default)] poster_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -71,14 +72,24 @@ async fn main() {
 }
 
 async fn run() -> Result<(), String> {
-    if env::var("MEDIARY_PLUGIN_ACTION").unwrap_or_default() != "refresh" { return Err("不支持的豆瓣将映动作".into()); }
+    let action = env::var("MEDIARY_PLUGIN_ACTION").unwrap_or_default();
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).map_err(|e| format!("读取动作参数失败: {e}"))?;
     if !input.trim().is_empty() { serde_json::from_str::<Value>(&input).map_err(|e| format!("动作参数不是有效 JSON: {e}"))?; }
     let context = Context::from_env()?;
-    let report = refresh(&context).await?;
-    println!("{}", json!({"notice": format!("豆瓣将映刷新完成：获取 {}，新增订阅 {}，发送提醒 {}。", report.fetched, report.subscribed, report.notifications), "report": report}));
-    Ok(())
+    match action.as_str() {
+        "refresh" => {
+            let report = refresh(&context).await?;
+            println!("{}", json!({"notice": format!("豆瓣将映刷新完成：获取 {}，新增订阅 {}，发送提醒 {}。", report.fetched, report.subscribed, report.notifications), "report": report}));
+            Ok(())
+        }
+        "history" => {
+            let result = history(&context).await?;
+            println!("{result}");
+            Ok(())
+        }
+        _ => Err(format!("不支持的豆瓣将映动作: {action}")),
+    }
 }
 
 #[derive(Serialize)]
@@ -99,6 +110,35 @@ impl Context {
             .build().map_err(|e| e.to_string())?;
         Ok(Self { api_url, token, data_dir, client, douban_client, settings })
     }
+}
+
+async fn history(context: &Context) -> Result<Value, String> {
+    let history_path = context.data_dir.join("history.json");
+    let history: History = load_json(&history_path);
+    let items: Vec<Value> = history.items.iter().map(|record| {
+        let poster = record.poster_path.as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| if value.starts_with("http") { value.to_string() } else { format!("https://image.tmdb.org/t/p/w500{value}") });
+        let subscribed = record.subscription == "已创建" || record.subscription == "已存在";
+        let notified = record.reminder == "已提醒";
+        json!({
+            "key": format!("{}:{}", record.title, record.processed_at),
+            "title": record.title,
+            "image_url": poster,
+            "badges": [
+                {"label": format!("想看 {}", record.wish_count), "tone": "info"},
+                {"label": record.subscription, "tone": if subscribed { "success" } else { "neutral" }},
+                {"label": record.reminder, "tone": if notified { "success" } else { "neutral" }}
+            ],
+            "metadata": [
+                format!("{} {}", record.media_type, record.year.map(|value| value.to_string()).unwrap_or_default()),
+                format!("开播 {}", record.air_date),
+                format!("处理 {}", record.processed_at)
+            ]
+        })
+    }).collect();
+    let notice = format!("共 {} 条处理记录，订阅 {}，提醒 {}", history.items.len(), history.summary.subscribed, history.summary.notifications);
+    Ok(json!({"notice": notice, "items": items}))
 }
 
 async fn refresh(context: &Context) -> Result<Report, String> {
@@ -153,7 +193,7 @@ async fn refresh(context: &Context) -> Result<Report, String> {
             reminder = "已发送".to_string();
         }
         history.items.retain(|record| record.title != title || record.air_date != air_date.clone().unwrap_or_default());
-        history.items.push_front(Record { title, media_type: media_type_label(&resolved.media_type), year: resolved.year, wish_count: item.wish_count, air_date: air_date.unwrap_or_else(|| "未知".into()), subscription, reminder, processed_at: Local::now().to_rfc3339() });
+        history.items.push_front(Record { title, media_type: media_type_label(&resolved.media_type), year: resolved.year, wish_count: item.wish_count, air_date: air_date.unwrap_or_else(|| "未知".into()), subscription, reminder, processed_at: Local::now().to_rfc3339(), poster_path: resolved.poster_path.clone() });
     }
     history.summary.runs += 1;
     while history.items.len() > MAX_RECORDS { history.items.pop_back(); }

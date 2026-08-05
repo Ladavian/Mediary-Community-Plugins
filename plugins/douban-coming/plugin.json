@@ -2,7 +2,7 @@
   "api_version": 1,
   "id": "douban-coming",
   "name": "豆瓣将映",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "监控豆瓣即将开播电视剧，按想看人数筛选，提前创建订阅并发送开播提醒。",
   "action_runtime": {
     "entrypoint": "./plugin"
@@ -23,6 +23,19 @@
     "notifications:send"
   ],
   "auto_grant_scopes": true,
+  "interactive_view": {
+    "title": "将映记录",
+    "eyebrow": "豆瓣将映",
+    "action": "history",
+    "trigger": {"label": "处理记录", "icon": "film"},
+    "auto_run": true,
+    "layout": "poster_grid",
+    "minimal": true,
+    "fields": [],
+    "empty": {"text": "暂无处理记录", "icon": "film"},
+    "empty_result_text": "暂无处理记录。",
+    "error_message": "读取将映记录失败。"
+  },
   "data_view": {
     "title": "将映处理记录",
     "file": "data/history.json",
