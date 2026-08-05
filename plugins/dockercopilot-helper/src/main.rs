@@ -13,13 +13,14 @@ async fn main() {
     let settings = read_settings();
     match run(&action, &settings).await {
         Ok(result) => {
-            save_last_run(&action, &result);
+            save_last_run(&action, true, result.get("notice").and_then(Value::as_str).unwrap_or(""));
             if let Err(error) = notify_success(&settings, &action, &result).await {
                 eprintln!("发送 DC 助手通知失败: {error}");
             }
             println!("{result}");
         }
         Err(error) => {
+            save_last_run(&action, false, &format!("执行失败：{error}"));
             if setting_bool(&settings, "send_notifications", true) {
                 if let Err(notification_error) = send_notification("DC 助手执行失败", &format!("动作：{}\n原因：{error}", action_label(&action))).await {
                     eprintln!("发送 DC 助手失败通知失败: {notification_error}");
@@ -286,12 +287,23 @@ fn action_label(action: &str) -> &str {
     }
 }
 
-fn save_last_run(action: &str, result: &Value) {
+const MAX_RUNS: usize = 20;
+
+fn save_last_run(action: &str, ok: bool, notice: &str) {
     let Ok(path) = plugin_data_dir() else { return; };
     if fs::create_dir_all(&path).is_err() { return; }
-    let record = json!({"action": action, "ok": true, "notice": result.get("notice").and_then(Value::as_str).unwrap_or(""), "completed_at": unix_time()});
+    let file = path.join("last-run.json");
+    let mut history: Value = fs::read_to_string(&file).ok().and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_else(|| json!({"summary": {}, "items": []}));
+    let mut items = history.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut summary = history.get("summary").cloned().unwrap_or_else(|| json!({}));
+    summary["action"] = json!(action);
+    summary["ok"] = json!(ok);
+    summary["runs"] = json!(summary.get("runs").and_then(Value::as_u64).unwrap_or(0) + 1);
+    items.insert(0, json!({"action": action, "ok": ok, "notice": notice, "completed_at": unix_time()}));
+    items.truncate(MAX_RUNS);
+    let updated = json!({"updated_at": unix_time(), "summary": summary, "items": items});
     let temp = path.join("last-run.json.tmp");
-    if fs::write(&temp, record.to_string()).is_ok() { let _ = fs::rename(temp, path.join("last-run.json")); }
+    if fs::write(&temp, updated.to_string()).is_ok() { let _ = fs::rename(temp, file); }
 }
 
 struct ContainerSelection {

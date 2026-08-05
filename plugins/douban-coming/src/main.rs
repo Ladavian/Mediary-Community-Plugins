@@ -21,16 +21,24 @@ struct Context {
 
 #[derive(Default, Serialize, Deserialize)]
 struct History {
+    #[serde(default)] updated_at: String,
+    #[serde(default)] summary: HistorySummary,
+    #[serde(default)] items: VecDeque<Record>,
+    #[serde(default)] notified: HashSet<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct HistorySummary {
     #[serde(default)] runs: usize,
     #[serde(default)] subscribed: usize,
     #[serde(default)] notifications: usize,
-    #[serde(default)] records: VecDeque<Record>,
-    #[serde(default)] notified: HashSet<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Record {
     title: String,
+    media_type: String,
+    year: Option<i32>,
     wish_count: i64,
     air_date: String,
     subscription: String,
@@ -129,7 +137,7 @@ async fn refresh(context: &Context) -> Result<Report, String> {
         if !existing.contains(&key) && days.is_some_and(|value| value >= 0 && value <= setting_i64(context, "advance_days", 7).max(0)) {
             if let Err(error) = create_subscription(context, &item, &resolved, season).await { report.failures.push(format!("{title}: 创建订阅失败: {error}")); continue; }
             existing.insert(key);
-            history.subscribed += 1;
+            history.summary.subscribed += 1;
             report.subscribed += 1;
             subscription = "已创建".to_string();
             created = true;
@@ -140,15 +148,16 @@ async fn refresh(context: &Context) -> Result<Report, String> {
             let content = format!("名称：{title}\n开播日期：{}\n想看人数：{}\n订阅状态：{}\n豆瓣链接：{}", air_date.clone().unwrap_or_else(|| "-".into()), item.wish_count, if created || existing.contains(&subscription_key(&resolved.tmdb_id, season)) { "已订阅" } else { "未订阅" }, item.link);
             send_notification(context, "豆瓣将映提醒", &content, resolved.poster_path.as_deref()).await?;
             history.notified.insert(notice_key);
-            history.notifications += 1;
+            history.summary.notifications += 1;
             report.notifications += 1;
             reminder = "已发送".to_string();
         }
-        history.records.retain(|record| record.title != title || record.air_date != air_date.clone().unwrap_or_default());
-        history.records.push_front(Record { title, wish_count: item.wish_count, air_date: air_date.unwrap_or_else(|| "未知".into()), subscription, reminder, processed_at: Local::now().to_rfc3339() });
+        history.items.retain(|record| record.title != title || record.air_date != air_date.clone().unwrap_or_default());
+        history.items.push_front(Record { title, media_type: media_type_label(&resolved.media_type), year: resolved.year, wish_count: item.wish_count, air_date: air_date.unwrap_or_else(|| "未知".into()), subscription, reminder, processed_at: Local::now().to_rfc3339() });
     }
-    history.runs += 1;
-    while history.records.len() > MAX_RECORDS { history.records.pop_back(); }
+    history.summary.runs += 1;
+    while history.items.len() > MAX_RECORDS { history.items.pop_back(); }
+    history.updated_at = Local::now().to_rfc3339();
     write_json(&history_path, &history)?;
     Ok(report)
 }
@@ -307,6 +316,7 @@ fn days_until(value: &str) -> Option<i64> { NaiveDate::parse_from_str(value, "%Y
 fn hours_until(value: &str) -> Option<f64> { let date = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?; let air_time = date.and_hms_opt(0, 0, 0)?.and_local_timezone(Local).single()?; Some((air_time - Local::now()).num_seconds() as f64 / 3600.0) }
 fn subscription_key(tmdb_id: &str, season: i64) -> String { format!("tv:{}:{}", tmdb_id.trim(), season) }
 fn value_id(value: &Value) -> Option<String> { value.as_str().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned).or_else(|| value.as_i64().map(|value| value.to_string())) }
+fn media_type_label(value: &str) -> String { match value.trim().to_ascii_lowercase().as_str() { "tv" => "电视剧".to_string(), "movie" => "电影".to_string(), other if other.is_empty() => "-".to_string(), other => other.to_string() } }
 fn required(key: &str) -> Result<String, String> { env::var(key).map_err(|_| format!("缺少环境变量 {key}")) }
 fn setting_text<'a>(context: &'a Context, key: &str, default: &'a str) -> &'a str { context.settings.get(key).and_then(Value::as_str).unwrap_or(default) }
 fn setting_i64(context: &Context, key: &str, default: i64) -> i64 { context.settings.get(key).and_then(Value::as_i64).and_then(|value| i64::try_from(value).ok()).unwrap_or(default) }
